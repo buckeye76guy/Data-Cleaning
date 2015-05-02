@@ -1,4 +1,4 @@
 # Replace non positive values from Petal.Width with NA
-if(Petal.Width <= 0){
+if(!is.na(Petal.Width) & Petal.Width <= 0){
 Petal.Width <- NA
 }
