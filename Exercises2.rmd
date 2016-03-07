@@ -1,0 +1,134 @@
+---
+title: "Tutorial Section 2 Exercise 2.3 & 2.4"
+author: "Josiah"
+date: "Sunday, May 03, 2015"
+output: html_document
+---
+
+### Synopisis
+This is my attempt at doing the exercises 2.3 & 2.4 for section 2 of [An Introduction To Data Cleaning With R](http://cran.r-project.org/doc/contrib/de_Jonge+van_der_Loo-Introduction_to_data_cleaning_with_R.pdf) article by **Edwin de Jonge** and **Mark van der Loo**. This is by no means the correct answers as they were not peer reviewed or presented to the authors of the document.
+
+### Some functions that are later used
+This is my function to get max length of elements in a list
+```{r}
+#Maximum length of a list
+maxlength <- function(x){
+  if(!is.list(x) | is.null(x)){
+    return("Either not a list or a null element")
+  }
+  rslt = 0;
+  for(i in 1:length(x)){
+    if(length(x[[i]]) > rslt){
+      rslt <- length(x[[i]])
+    }
+  }
+  return(rslt)
+}
+```
+This is my assignfields function inspired by the one provided by the article
+```{r}
+assignfields <- function(x, n = 3){
+  if(!is.vector(x) | is.null(x) | n <= 0){
+    return("Either not a vector, a null element or your
+           pivot index is not at least 1")
+  }
+  out <- character(n)
+  # get names
+  i <- grepl("[[:alpha:]]",x)
+  out[1] <- x[i]
+  # get age
+  # Since weight is decimal, Hoping that none is written as
+  # integer or 12.0 for example, the following might work
+  i <- which(as.integer(x) == x)
+  out[2] <- ifelse(length(i) > 0, x[i], NA)
+  # get weight
+  if(!any(grepl(",", x))){
+    i <- which(as.integer(x) != x)
+  } else {
+    i <- which(grepl(",", x))
+  }
+  out[3] <- ifelse(length(i) >0, x[i], NA)
+  out
+}
+```
+
+## Exercise 2.3 : Using readLines
+1 Getting the data
+```{r}
+fileurl <- "http://raw.githubusercontent.com/edwindj/datacleaning/master/Rnw/syllabus/files/example.txt"
+download.file(fileurl, destfile = "example.txt", method = "curl")
+```
+2 Reading data into object
+```{r}
+(Example <- readLines("example.txt"))
+```
+3 Using grepl to separate comments & data
+```{r}
+(com_vec <- Example[grepl("^//", Example)])
+(dat_vec <- Example[!grepl("^//", Example)])
+```
+4 Extract the date from the first comment line
+```{r}
+(date_created <- gsub("^ ", "", strsplit(com_vec[1],":")[[1]][2]))
+```
+5 Read data into matrix
+
+* Split data by ';'
+```{r}
+(my_list <- strsplit(dat_vec, ";"))
+```
+* Find Maximum length of elements of list and append shorter elements with NA
+
+The maximum number of fields returned by split is `r maxlength(my_list)`
+```{r, warning=FALSE}
+(dat_fields <- lapply(my_list, assignfields))
+```
+* Unlisting and turning into a matrix
+```{r}
+(my_mat <- matrix(
+    unlist(dat_fields)
+   , nrow=length(dat_fields)
+   , byrow=TRUE))
+```
+6 Extract names of the fields and set them as column names
+```{r}
+# Notice that each comment line can be split on the : mark. Once you split it on that mark, you need to pick the second element of each vector in the list. A clever way to do that is unlisting and targeting the even indexes
+Names <- strsplit(com_vec[2:4], ":")
+# The rep(...) targets the even indexes: 2,4,6
+(Names <- gsub("^ ", "", unlist(Names)[rep(c(FALSE,TRUE),2)]))
+colnames(my_mat) <- Names
+my_mat
+```
+
+## Exercise 2.4 : Coercing mat to data.frame
+1 Coerce to data frame : avoid factors
+```{r}
+(my_dat <- data.frame(my_mat, stringsAsFactors = F))
+sapply(my_dat, class)
+```
+2 Use a string distance technique to create factor variable
+```{r}
+codes <- c("male", "female")
+dist_df <- adist(my_dat$Gender, codes)
+colnames(dist_df) <- codes
+rownames(dist_df) <- my_dat$Gender
+dist_df
+ind <- apply(dist_df, 1, which.min)
+(coded_dat <- data.frame(gender = my_dat$Gender, coded = codes[ind]))
+tmp_vec <- plyr::revalue(coded_dat$coded, c(male = "man", female = "woman"))
+(my_dat$Gender <- tmp_vec)
+my_dat
+sapply(my_dat, class)
+```
+3 Coerce Age into Integers
+```{r}
+(my_dat$Age..in.years. <- as.integer(my_dat$Age))
+sapply(my_dat, class)
+```
+4 Coerce Weight into numeric
+```{r}
+my_dat$Weight..in.kg. <- gsub(",", ".", my_dat$Weight)
+my_dat$Weight..in.kg. <- as.numeric(my_dat$Weight..in.kg.)
+my_dat
+sapply(my_dat, class)
+```

@@ -1,0 +1,195 @@
+---
+title: "Tutorial Section 3 Exercise"
+author: "Josiah"
+date: "Friday, May 01, 2015"
+output: html_document
+---
+
+### Synopisis
+This is my attempt at doing the exercises for section 3 of [An Introduction To Data Cleaning With R](http://cran.r-project.org/doc/contrib/de_Jonge+van_der_Loo-Introduction_to_data_cleaning_with_R.pdf) article by **Edwin de Jonge** and **Mark van der Loo**. This is by no means the correct answers as they were not peer reviewed or presented to the authors of the document.
+
+### Loading Packages
+```{r, warning=FALSE}
+library(editrules)
+library(deducorrect)
+library(VIM)
+set.seed(123)
+```
+
+## Exercise 3.1 : Reading & Manually Checking
+Data
+```{r}
+fileurl <- "http://raw.github.com/edwindj/datacleaning/master/data/dirty_iris.csv"
+download.file(fileurl, destfile = "dirty_iris.csv",method = "curl")
+```
+* Read in the data
+```{r}
+df <- read.csv("dirty_iris.csv", stringsAsFactors = F)
+sapply(df, class)
+```
+* The percentage of complete observations
+```{r}
+complete_case_percent <- 100*length(which(complete.cases(df)))/nrow(df)
+paste("Percentage of complete observations is ", complete_case_percent, "%", sep = "")
+```
+* Identifying any non NA special values and replacing them with NA
+```{r}
+#We mustn't worry about NaN
+any(sapply(df, is.nan))
+```
+
+```{r}
+is.special <- function(x){
+  if (is.numeric(x)) !is.finite(x) else is.na(x)
+}
+Ind <- data.frame(sapply(df, is.special))
+for(i in 1:ncol(Ind)){
+    tmp <- rep(NA, length(df[Ind[[i]], i]))
+    df[Ind[[i]], i] <- tmp
+}
+
+head(df)
+```
+
+## Exercise 3.2 : Checking With Rules
+* Setting rules
+```{r}
+fileurl <- "http://raw.githubusercontent.com/buckeye76guy/Data-Cleaning/master/exedits.txt"
+download.file(fileurl, destfile = "exedits.txt", method = "curl")
+(E <- editfile("exedits.txt"))
+```
+
+* How many rules were broken
+```{r, fig.height=8, fig.width=8}
+ve <- violatedEdits(E, df)
+summary(ve)
+plot(ve)
+```
+
+* Percentage of data that has no errors
+
+There were 90 records with no violations out of 150 observations
+```{r}
+percent_correct <- (90/150)*100
+paste("Percentage of correct records is ", percent_correct, "%", sep = "")
+```
+
+* Find out which observations have too long petals
+```{r}
+OBS <- which(df$Petal.Length >= df$Sepal.Length)
+```
+The `r paste(OBS, c("th", "rd"), sep = "")` observations are The ones that have a too long Petal
+
+* Finding Outliers
+```{r, fig.height=8}
+boxplot(df$Sepal.Length, main = "Box plot for Sepal.Length")
+outliers_SL <- boxplot.stats(df$Sepal.Length)$out
+```
+The outliers are `r outliers_SL`. From looking at the box plot someone might have forgotten to put a decimal in some of the values. The outlier at 0 is a bit weird however. I have no idea what happened there.
+
+* setting the outliers to NA
+```{r}
+new_df <- df
+ind <- new_df$Sepal.Length %in% outliers_SL
+new_df$Sepal.Length[ind] <- rep(NA, length(outliers_SL))
+boxplot(new_df$Sepal.Length)
+```
+
+## Exercise 3.3 : Correcting
+* Replace non positive Petal Width values with NA. From a quick exploratory analysis I determined that No Petal Width value was negative. Perhaps the Sepal.Width was the one we needed to adjust. Then again the second part of this problem allows us to fix all non positive Sepal Width since it was in our editrules.
+```{r}
+fileurl <- "http://github.com/buckeye76guy/Data-Cleaning/blob/master/excorrections.txt"
+download.file(fileurl, destfile = "excorrections.txt", method = "curl")
+(R <- correctionRules("excorrections.txt"))
+cor <- correctWithRules(R, new_df)
+cor$corrections
+head(cor$corrected, 10)
+```
+
+* Replace all erroneous values using the result of localizeErrors
+```{r}
+new_df <- cor$corrected
+head(le$adapt)
+# First set the too long petal to NA
+new_df[OBS, "Petal.Length"] <- NA
+# Now attempt to NA most of the errors using le$adapt
+for(i in 1:ncol(le$adapt)){
+  new_df[le$adapt[[i]], i] <- NA # Indices with TRUE in le turn to NA
+}
+summary(violatedEdits(E, new_df))
+# I want to use editmatrix here but that won't introduce NAs
+# num 3 rule
+ind <- which(new_df$Petal.Length <= 0)
+new_df[ind, "Petal.Length"] <- NA
+# num 2 rule
+ind <- which(new_df$Sepal.Width <= 0)
+new_df[ind, "Sepal.Width"] <- NA
+# num 5 rule
+ind <- which(2*new_df$Petal.Width > new_df$Petal.Length)
+new_df[ind, c("Petal.Width", "Petal.Length")] <- NA
+
+# No violations of any rules we've set
+summary(violatedEdits(E, new_df))
+#Data after NA'ing all errorenous datum
+head(new_df, 10)
+```
+
+## Exercise 3.4 : Imputing
+* Use KNN (VIM) to impute all missing values
+```{r, warning=FALSE}
+new_df_imp <- kNN(new_df)
+# Is there any number that is not finite?
+ifelse((!any(sapply(new_df_imp, is.finite))), "Some +/- Inf remain", "All numeric values are finite")
+# Is there any NaN
+if (!any(sapply(new_df_imp, is.nan))) "No NAN"
+# Is there any na?
+if (!any(sapply(new_df_imp, is.na))) "As expected: No Missing values"
+#Data after KNN imputation: Compare to previous data
+head(new_df_imp[,names(new_df)], 10)
+```
+
+* Use sequential hot deck imputation by first sorting data by species. In here I will use the median of Petal.Width as the last element in case of NA since the median is actually an entry in the vector (or the average of only 2 of those entries).
+
+1. This is a function offered by the article
+```{r}
+# x : vector to be imputed
+# last : value to use if last value of x is empty
+seqImpute <- function(x,last){
+n <- length(x)
+x <- c(x,last)
+i <- is.na(x)
+while(any(i)){
+x[i] <- x[which(i) + 1]
+i <- is.na(x)
+}
+x[1:n]
+}
+```
+2. Ordered Data Frame By Species and Imputation
+```{r}
+new_df_spec <- new_df[order(new_df$Species),]
+head(new_df_spec)
+new_df_spec$Petal.Width <- seqImpute(new_df_spec$Petal.Width, median(new_df_spec$Petal.Width, na.rm = TRUE))
+if (!any(is.na(new_df_spec$Petal.Width))) "No Missing Values in imputed Petal.Width as expected : Evidence presented below : com_df$order1"
+```
+3. Ordered Data Frame By Species & Sepal.Length
+```{r}
+new_df_spec_SL <- new_df[order(new_df$Species, new_df$Sepal.Length),]
+head(new_df_spec_SL)
+new_df_spec_SL$Petal.Width <- seqImpute(new_df_spec_SL$Petal.Width, median(new_df_spec_SL$Petal.Width, na.rm = TRUE))
+if (!any(is.na(new_df_spec_SL$Petal.Width))) "No Missing values in imputed Petal.Width as expected : Evidence presented below : comp_df$order2"
+```
+4. Comparing The imputed vectors: **Order1** is for the ordering by Species alone and **Order2** is for the ordering by Species and Sepal.Length
+```{r}
+comp_df <- data.frame(order1 = new_df_spec$Petal.Width, order2 = new_df_spec_SL$Petal.Width)
+head(comp_df)
+```
+The ordering made a big difference here. But I suspect that we will have the exact same entries in this vector. They are just permuted in some different order. To confirm:
+```{r}
+#Set difference
+setdiff(comp_df$order1, comp_df$order2)
+#Ordered imputed Petal.Width from first ordering
+sort(unique(comp_df$order1))
+#Ordered imputed Petal.Width from second ordering
+sort(unique(comp_df$order2))
+```
